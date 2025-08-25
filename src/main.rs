@@ -20,8 +20,6 @@ enum Commands {
     Encrypt {
         /// Input file path to encrypt
         input: String,
-        /// Output file to write
-        output: String,
     },
 
     /// Decrypt input -> output file or directory
@@ -64,13 +62,14 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Encrypt { input, output } => {
-            crypto::process_encrypt(&cli.passphrase, &input, &output)?;
-            println!("Encrypted -> {}", output);
+        Commands::Encrypt { input } => {
+            let encrypted_file = crypto::encrypt(&cli.passphrase, &input)?;
+            println!("Encrypted {} -> {}", input, encrypted_file);
         }
 
         Commands::Decrypt { input } => {
-            crypto::process_decrypt(&cli.passphrase, &input)?;
+            let decrypted_file = crypto::decrypt(&cli.passphrase, &input)?;
+            println!("Decrypted {} -> {}", input, decrypted_file);
         }
     }
 

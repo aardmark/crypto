@@ -3,10 +3,13 @@ use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use cipher::StreamCipherCoreWrapper;
 use error::Error;
+use rand::Rng;
 use rand::RngCore;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::PathBuf;
 use std::result;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A specialized [`Result`] type for crypto operations.
 ///
@@ -119,10 +122,11 @@ fn apply_cipher<R: Read, W: Write>(
 }
 
 // ---- Core: Encrypt (streaming) ----
-pub fn process_encrypt(passphrase: &str, input: &str, output: &str) -> Result<()> {
+pub fn encrypt(passphrase: &str, input: &str) -> Result<String> {
     let mut salt = [0u8; SALT_LEN];
     rand::thread_rng().fill_bytes(&mut salt);
     let key: [u8; 32] = derive_key(passphrase, &salt)?;
+    let output = unique_filename();
     let mut reader = BufReader::new(File::open(&input)?);
     let mut writer = BufWriter::new(File::create(&output)?);
 
@@ -150,11 +154,11 @@ pub fn process_encrypt(passphrase: &str, input: &str, output: &str) -> Result<()
     apply_cipher(&mut reader, &mut writer, &mut cipher, offset)?;
 
     writer.flush()?;
-    Ok(())
+    Ok(output)
 }
 
 // ---- Core: Decrypt (streaming) ----
-pub fn process_decrypt(passphrase: &str, input: &str) -> Result<()> {
+pub fn decrypt(passphrase: &str, input: &str) -> Result<String> {
     let mut reader = BufReader::new(File::open(input)?);
     let (salt, nonce) = read_header(&mut reader)?;
 
@@ -181,6 +185,22 @@ pub fn process_decrypt(passphrase: &str, input: &str) -> Result<()> {
     apply_cipher(&mut reader, &mut writer, &mut cipher, offset)?;
 
     writer.flush()?;
-    println!("Decrypted -> {}", original_file_name);
-    Ok(())
+    Ok(original_file_name)
+}
+
+fn unique_filename() -> String {
+    loop {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let random: u32 = rand::thread_rng().r#gen();
+        let candidate = format!("{}-{}", ts, random);
+
+        let path = PathBuf::from(".").join(&candidate);
+
+        if !path.exists() {
+            return candidate;
+        }
+    }
 }
