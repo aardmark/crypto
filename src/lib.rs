@@ -2,7 +2,7 @@ mod error;
 use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use cipher::StreamCipherCoreWrapper;
-use error::Error;
+pub use error::Error;
 use rand::Rng;
 use rand::RngCore;
 use std::fs::File;
