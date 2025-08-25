@@ -1,8 +1,6 @@
-mod error;
 use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use cipher::StreamCipherCoreWrapper;
-pub use error::Error;
 use rand::Rng;
 use rand::RngCore;
 use std::fs::File;
@@ -10,6 +8,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::result;
 use std::time::{SystemTime, UNIX_EPOCH};
+use thiserror::Error;
 
 /// A specialized [`Result`] type for crypto operations.
 ///
@@ -19,6 +18,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// This type alias is generally used to avoid writing out [`crypto::Error`] directly and
 /// is otherwise a direct mapping to [`Result`].
 pub type Result<T> = result::Result<T, Error>;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("data store disconnected")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Crypto(String),
+}
 
 // -------- File format (header is plaintext, payload is encrypted) --------
 // [ MAGIC(4) = b"C20F" ]
