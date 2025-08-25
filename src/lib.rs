@@ -1,9 +1,21 @@
+mod error;
 use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use cipher::StreamCipherCoreWrapper;
+use error::Error;
 use rand::RngCore;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::result;
+
+/// A specialized [`Result`] type for crypto operations.
+///
+/// This type is broadly used across [`crate::crypto`] for any operation which may
+/// produce an error.
+///
+/// This type alias is generally used to avoid writing out [`crypto::Error`] directly and
+/// is otherwise a direct mapping to [`Result`].
+pub type Result<T> = result::Result<T, Error>;
 
 // -------- File format (header is plaintext, payload is encrypted) --------
 // [ MAGIC(4) = b"C20F" ]
@@ -19,24 +31,24 @@ const NONCE_LEN: usize = 12;
 const BUFFER_SIZE: usize = 4096;
 
 // ---- Key derivation (Argon2id) ----
-fn derive_key(passphrase: &str, salt: &[u8]) -> [u8; 32] {
+fn derive_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
     use argon2::{Algorithm, Argon2, Params, Version};
     // ~19 MiB memory, 2 iterations, 1 lane; output 32 bytes
     let params = Params::new(19 * 1024, 2, 1, Some(32)).expect("argon2 params");
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut key = [0u8; 32];
-    argon2
-        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
-        .expect("argon2 hashing failed");
-    key
+    match argon2.hash_password_into(passphrase.as_bytes(), salt, &mut key) {
+        Ok(_) => Ok(key),
+        Err(_) => Err(Error::Crypto(String::from("Unable to generate key"))),
+    }
 }
 
 fn write_header<W: Write>(
     mut writer: W,
     salt: &[u8; SALT_LEN],
     nonce: &[u8; NONCE_LEN],
-) -> std::io::Result<()> {
+) -> Result<()> {
     writer.write_all(MAGIC)?;
     writer.write_all(&[VERSION])?;
     writer.write_all(&[SALT_LEN as u8])?;
@@ -45,28 +57,25 @@ fn write_header<W: Write>(
     Ok(())
 }
 
-fn read_header<R: Read>(mut reader: R) -> std::io::Result<(Vec<u8>, [u8; NONCE_LEN])> {
+fn read_header<R: Read>(mut reader: R) -> Result<(Vec<u8>, [u8; NONCE_LEN])> {
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "bad magic",
-        ));
+        return Err(Error::Crypto(String::from("Not an encrypted file.")));
     }
     let mut ver = [0u8; 1];
     reader.read_exact(&mut ver)?;
     if ver[0] != VERSION {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "unsupported version",
-        ));
+        return Err(Error::Crypto(String::from("Invalid version.")));
     }
     let mut salt_len_b = [0u8; 1];
     reader.read_exact(&mut salt_len_b)?;
     let salt_len = salt_len_b[0] as usize;
     let mut salt = vec![0u8; salt_len];
     reader.read_exact(&mut salt)?;
+    if salt.len() != SALT_LEN {
+        return Err(Error::Crypto(String::from("Invalid salt.")));
+    }
     let mut nonce = [0u8; NONCE_LEN];
     reader.read_exact(&mut nonce)?;
     Ok((salt, nonce))
@@ -90,7 +99,7 @@ fn apply_cipher<R: Read, W: Write>(
         >,
     >,
     offset: u64,
-) -> std::io::Result<u64> {
+) -> Result<u64> {
     let mut buffer = [0u8; BUFFER_SIZE];
     let mut offset = offset;
     cipher.seek(offset);
@@ -110,17 +119,17 @@ fn apply_cipher<R: Read, W: Write>(
 }
 
 // ---- Core: Encrypt (streaming) ----
-pub fn process_encrypt(passphrase: &str, input: &str, output: &str) -> std::io::Result<()> {
+pub fn process_encrypt(passphrase: &str, input: &str, output: &str) -> Result<()> {
     let mut salt = [0u8; SALT_LEN];
     rand::thread_rng().fill_bytes(&mut salt);
-    let key: [u8; 32] = derive_key(passphrase, &salt);
-    let mut in_file = BufReader::new(File::open(&input)?);
-    let mut out_file = BufWriter::new(File::create(&output)?);
+    let key: [u8; 32] = derive_key(passphrase, &salt)?;
+    let mut reader = BufReader::new(File::open(&input)?);
+    let mut writer = BufWriter::new(File::create(&output)?);
 
     let mut nonce = [0u8; NONCE_LEN];
     rand::thread_rng().fill_bytes(&mut nonce);
 
-    write_header(&mut out_file, &salt, &nonce)?;
+    write_header(&mut writer, &salt, &nonce)?;
 
     let mut cipher = ChaCha20::new((&key).into(), (&nonce).into());
 
@@ -135,28 +144,21 @@ pub fn process_encrypt(passphrase: &str, input: &str, output: &str) -> std::io::
     let mut offset: u64 = 0;
     cipher.seek(offset);
     cipher.apply_keystream(&mut prefix);
-    out_file.write_all(&prefix)?;
+    writer.write_all(&prefix)?;
     offset += prefix.len() as u64;
 
-    apply_cipher(&mut in_file, &mut out_file, &mut cipher, offset)?;
+    apply_cipher(&mut reader, &mut writer, &mut cipher, offset)?;
 
-    out_file.flush()?;
+    writer.flush()?;
     Ok(())
 }
 
 // ---- Core: Decrypt (streaming) ----
-pub fn process_decrypt(passphrase: &str, input: &str) -> std::io::Result<()> {
+pub fn process_decrypt(passphrase: &str, input: &str) -> Result<()> {
     let mut reader = BufReader::new(File::open(input)?);
     let (salt, nonce) = read_header(&mut reader)?;
 
-    if salt.len() != SALT_LEN {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "unexpected salt length",
-        ));
-    }
-
-    let key: [u8; 32] = derive_key(passphrase, &salt);
+    let key: [u8; 32] = derive_key(passphrase, &salt)?;
     let mut cipher = ChaCha20::new((&key).into(), (&nonce).into());
     let mut offset: u64 = 0;
 

@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use crypto;
+use crypto::Result;
 
 #[derive(Parser)]
 #[command(author, version, about = "ChaCha20 file encrypt/decrypt with Argon2id KDF, with encrypted filename support", long_about = None)]
@@ -59,7 +60,7 @@ enum Commands {
 // }
 
 // ---- Entrypoint ----
-fn main() -> std::io::Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
