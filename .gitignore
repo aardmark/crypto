@@ -1,4 +1,5 @@
 /target
 100*
 test.sh
+*.enc
 
