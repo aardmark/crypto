@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
-use crypto::{Error, Result};
-use std::path::Path;
+use crypto::Result;
 
 #[derive(Parser)]
 #[command(author, version, about = "ChaCha20 file encrypt/decrypt with Argon2id KDF, with encrypted filename support", long_about = None)]
@@ -9,23 +8,31 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Provide a passphrase (Argon2id derives a 32-byte key; salt stored in header)
+    /// The passphrase used to encrypt/decrypt the file
     #[arg(short, long)]
     passphrase: String,
+
+    /// Delete the input file after encryption/decryption
+    #[arg(short, long)]
+    delete: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Encrypt input -> output file contains header + encrypted(filename + data)
+    /// Encrypt the input file
     Encrypt {
         /// Input file path to encrypt
-        input: String,
+        file_name: String,
     },
 
-    /// Decrypt input -> output file or directory
+    /// Decrypt the input file
     Decrypt {
         /// Input file (must be produced by this tool)
-        input: String,
+        file_name: String,
+
+        /// Overwrite existing files
+        #[arg(short, long)]
+        overwrite: bool,
     },
 }
 
@@ -34,18 +41,18 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Encrypt { input } => {
-            let path = Path::new(&input);
-            if !path.exists() {
-                return Err(Error::Crypto(String::from("File not found")));
-            }
-            let encrypted_file = crypto::encrypt(&cli.passphrase, &input)?;
-            println!("Encrypted {} -> {}", input, encrypted_file);
+        Commands::Encrypt { file_name } => {
+            let encrypted_file = crypto::encrypt_file(&cli.passphrase, &file_name, cli.delete)?;
+            println!("Encrypted {} -> {}", file_name, encrypted_file);
         }
 
-        Commands::Decrypt { input } => {
-            let decrypted_file = crypto::decrypt(&cli.passphrase, &input)?;
-            println!("Decrypted {} -> {}", input, decrypted_file);
+        Commands::Decrypt {
+            file_name,
+            overwrite,
+        } => {
+            let decrypted_file =
+                crypto::decrypt_file(&cli.passphrase, &file_name, cli.delete, overwrite)?;
+            println!("Decrypted {} -> {}", file_name, decrypted_file);
         }
     }
 

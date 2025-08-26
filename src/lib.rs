@@ -3,7 +3,7 @@ use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use cipher::StreamCipherCoreWrapper;
 use rand::Rng;
 use rand::RngCore;
-use std::fs::File;
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::result;
@@ -129,7 +129,7 @@ fn apply_cipher<R: Read, W: Write>(
 }
 
 // ---- Core: Encrypt (streaming) ----
-pub fn encrypt(passphrase: &str, input: &str) -> Result<String> {
+pub fn encrypt_file(passphrase: &str, input: &str, delete: bool) -> Result<String> {
     let mut salt = [0u8; SALT_LEN];
     rand::thread_rng().fill_bytes(&mut salt);
     let key: [u8; 32] = derive_key(passphrase, &salt)?;
@@ -161,11 +161,21 @@ pub fn encrypt(passphrase: &str, input: &str) -> Result<String> {
     apply_cipher(&mut reader, &mut writer, &mut cipher, offset)?;
 
     writer.flush()?;
+    if delete {
+        drop(reader);
+        fs::remove_file(input)?;
+    }
+
     Ok(output)
 }
 
 // ---- Core: Decrypt (streaming) ----
-pub fn decrypt(passphrase: &str, input: &str) -> Result<String> {
+pub fn decrypt_file(
+    passphrase: &str,
+    input: &str,
+    delete: bool,
+    overwrite: bool,
+) -> Result<String> {
     let mut reader = BufReader::new(File::open(input)?);
     let (salt, nonce) = read_header(&mut reader)?;
 
@@ -187,12 +197,26 @@ pub fn decrypt(passphrase: &str, input: &str) -> Result<String> {
     offset += original_filename_length as u64;
     let original_file_name = String::from_utf8_lossy(&buffer).to_string();
 
-    let mut writer = BufWriter::new(File::create(&original_file_name)?);
+    let mut writer = get_writer(&original_file_name, overwrite)?;
 
     apply_cipher(&mut reader, &mut writer, &mut cipher, offset)?;
 
     writer.flush()?;
+    if delete {
+        drop(reader);
+        fs::remove_file(input)?;
+    }
+
     Ok(original_file_name)
+}
+
+fn get_writer(file_name: &str, overwrite: bool) -> Result<BufWriter<File>> {
+    let file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .create_new(!overwrite)
+        .open(file_name)?;
+    Ok(BufWriter::new(file))
 }
 
 fn unique_filename() -> String {
@@ -202,7 +226,7 @@ fn unique_filename() -> String {
             .unwrap()
             .as_millis();
         let random: u32 = rand::thread_rng().r#gen();
-        let candidate = format!("{}-{}", ts, random);
+        let candidate = format!("{}-{}.enc", ts, random);
 
         let path = PathBuf::from(".").join(&candidate);
 
