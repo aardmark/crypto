@@ -1,7 +1,6 @@
 use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use cipher::StreamCipherCoreWrapper;
-use rand::Rng;
 use rand::RngCore;
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
@@ -152,7 +151,7 @@ fn get_unique_file_name(path: &PathBuf) -> Result<String> {
     loop {
         let mut file_path = path.clone();
         let ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        let random: u32 = rand::thread_rng().r#gen();
+        let random: u32 = rand::random();
         let file_name = format!("{}-{}.enc", ts, random);
         file_path.push(&file_name);
 
@@ -169,13 +168,12 @@ pub fn encrypt_file(passphrase: &str, file_path: &PathBuf, delete: bool) -> Resu
 
     // create the salf for generating the key (passphrase + salt)
     let mut salt = [0u8; SALT_LEN];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::rng().fill_bytes(&mut salt);
     let key: [u8; 32] = derive_key(passphrase, &salt)?;
 
     // create nonce for encryption
-    // TODO: update rand package
     let mut nonce = [0u8; NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    rand::rng().fill_bytes(&mut nonce);
 
     let (path, file_name) = split_file_path(&file_path)?;
     let unique_file_name = get_unique_file_name(&path)?;
