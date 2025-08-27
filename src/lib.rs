@@ -162,7 +162,7 @@ fn get_unique_file_name(path: &PathBuf) -> Result<String> {
 }
 
 // ---- Core: Encrypt (streaming) ----
-pub fn encrypt_file(passphrase: &str, file_path: &PathBuf, delete: bool) -> Result<String> {
+pub fn encrypt_file(passphrase: &str, file_path: &PathBuf, delete: bool) -> Result<PathBuf> {
     // make sure it's a file, and it exists
     ensure_file(file_path)?;
 
@@ -211,7 +211,7 @@ pub fn encrypt_file(passphrase: &str, file_path: &PathBuf, delete: bool) -> Resu
         fs::remove_file(file_path)?;
     }
 
-    Ok(unique_file_name)
+    Ok(unique_file_path)
 }
 
 // ---- Core: Decrypt (streaming) ----
@@ -220,7 +220,7 @@ pub fn decrypt_file(
     file_path: &PathBuf,
     delete: bool,
     overwrite: bool,
-) -> Result<String> {
+) -> Result<PathBuf> {
     let mut reader = BufReader::new(File::open(file_path)?);
     let (salt, nonce) = read_header(&mut reader)?;
 
@@ -242,7 +242,7 @@ pub fn decrypt_file(
     offset += original_filename_length as u64;
     let original_file_name = String::from_utf8_lossy(&buffer).to_string();
 
-    let (path, _) = split_file_path(&file_path)?;
+    let (mut path, _) = split_file_path(&file_path)?;
 
     let mut writer = get_writer(&path, &original_file_name, overwrite)?;
 
@@ -254,7 +254,8 @@ pub fn decrypt_file(
         fs::remove_file(file_path)?;
     }
 
-    Ok(original_file_name)
+    path.push(original_file_name);
+    Ok(path)
 }
 
 fn get_writer(path: &PathBuf, file_name: &str, overwrite: bool) -> Result<BufWriter<File>> {

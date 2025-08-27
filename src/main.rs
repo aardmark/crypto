@@ -22,8 +22,10 @@ enum Commands {
         #[arg(short, long)]
         delete: bool,
 
-        /// Input file path to encrypt
-        file_name: PathBuf,
+        /// The file(s) to encrypt
+        #[clap(value_parser, num_args = 1.., required = true)]
+        #[arg(short, long)]
+        files: Vec<PathBuf>,
     },
 
     /// Decrypt the input file
@@ -40,8 +42,10 @@ enum Commands {
         #[arg(short, long)]
         overwrite: bool,
 
-        /// Input file (must be produced by this tool)
-        file_name: PathBuf,
+        /// The file(s) to decrypt (must have been produced by this tool)
+        #[clap(value_parser, num_args = 1.., required = true)]
+        #[arg(short, long)]
+        files: Vec<PathBuf>,
     },
 }
 
@@ -53,22 +57,53 @@ fn main() -> Result<()> {
         Commands::Encrypt {
             passphrase,
             delete,
-            file_name,
+            files,
         } => {
-            let encrypted_file = crypto::encrypt_file(&passphrase, &file_name, delete)?;
-            println!("Encrypted {:?} -> {}", file_name, encrypted_file);
+            encrypt_files(&passphrase, &files, delete)?;
         }
 
         Commands::Decrypt {
             passphrase,
             delete,
-            file_name,
+            files,
             overwrite,
         } => {
-            let decrypted_file = crypto::decrypt_file(&passphrase, &file_name, delete, overwrite)?;
-            println!("Decrypted {:?} -> {}", file_name, decrypted_file);
+            decrypt_files(&passphrase, &files, delete, overwrite)?;
         }
     }
 
+    Ok(())
+}
+
+fn encrypt_files(passphrase: &str, files: &Vec<PathBuf>, delete: bool) -> Result<()> {
+    for file_name in files {
+        match crypto::encrypt_file(&passphrase, &file_name, delete) {
+            Ok(encrypted_file) => {
+                println!("Encrypted {:?} -> {:?}", file_name, encrypted_file);
+            }
+            Err(e) => {
+                eprintln!("Could not encrypt {file_name:?}: {e}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decrypt_files(
+    passphrase: &str,
+    files: &Vec<PathBuf>,
+    delete: bool,
+    overwrite: bool,
+) -> Result<()> {
+    for file_name in files {
+        match crypto::decrypt_file(&passphrase, &file_name, delete, overwrite) {
+            Ok(decrypted_file) => {
+                println!("Decrypted {:?} -> {:?}", file_name, decrypted_file);
+            }
+            Err(e) => {
+                eprintln!("Could not decrypt {file_name:?}: {e}");
+            }
+        }
+    }
     Ok(())
 }
