@@ -12,7 +12,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Encrypt the input file
+    /// Encrypt the input file(s)
     Encrypt {
         /// The passphrase to encrypt the file with
         #[arg(short, long)]
@@ -28,7 +28,7 @@ enum Commands {
         files: Vec<PathBuf>,
     },
 
-    /// Decrypt the input file
+    /// Decrypt the input file(s)
     Decrypt {
         /// The passphrase that was used to encrypt the file
         #[arg(short, long)]
