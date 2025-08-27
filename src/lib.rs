@@ -3,12 +3,29 @@ use chacha20::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use cipher::StreamCipherCoreWrapper;
 use rand::Rng;
 use rand::RngCore;
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::result;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+
+type StreamCipherWrapper = StreamCipherCoreWrapper<
+    chacha20::ChaChaCore<
+        cipher::typenum::UInt<
+            cipher::typenum::UInt<
+                cipher::typenum::UInt<
+                    cipher::typenum::UInt<cipher::typenum::UTerm, cipher::consts::B1>,
+                    cipher::consts::B0,
+                >,
+                cipher::consts::B1,
+            >,
+            cipher::consts::B0,
+        >,
+    >,
+>;
 
 /// A specialized [`Result`] type for crypto operations.
 ///
@@ -21,8 +38,10 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("data store disconnected")]
+    #[error("IO Error")]
     Io(#[from] std::io::Error),
+    #[error("System Time Error")]
+    Time(#[from] std::time::SystemTimeError),
     #[error("{0}")]
     Crypto(String),
 }
@@ -94,20 +113,7 @@ fn read_header<R: Read>(mut reader: R) -> Result<(Vec<u8>, [u8; NONCE_LEN])> {
 fn apply_cipher<R: Read, W: Write>(
     reader: &mut BufReader<R>,
     writer: &mut BufWriter<W>,
-    cipher: &mut StreamCipherCoreWrapper<
-        chacha20::ChaChaCore<
-            cipher::typenum::UInt<
-                cipher::typenum::UInt<
-                    cipher::typenum::UInt<
-                        cipher::typenum::UInt<cipher::typenum::UTerm, cipher::consts::B1>,
-                        cipher::consts::B0,
-                    >,
-                    cipher::consts::B1,
-                >,
-                cipher::consts::B0,
-            >,
-        >,
-    >,
+    cipher: &mut StreamCipherWrapper,
     offset: u64,
 ) -> Result<u64> {
     let mut buffer = [0u8; BUFFER_SIZE];
@@ -128,55 +134,96 @@ fn apply_cipher<R: Read, W: Write>(
     Ok(offset)
 }
 
+fn split_file_path(file_path: &PathBuf) -> Result<(PathBuf, &OsStr)> {
+    let Some(path) = file_path.parent() else {
+        return Err(Error::Crypto(String::from("Cannot parse input path")));
+    };
+    let Some(file_name) = file_path.file_name() else {
+        return Err(Error::Crypto(String::from(
+            "Cannot parse input path file name",
+        )));
+    };
+    let path = PathBuf::from(path);
+    Ok((path, file_name))
+}
+
+fn get_unique_file_name(path: &PathBuf) -> Result<String> {
+    // TODO: ensure path is a path (or empty?)
+    loop {
+        let mut file_path = path.clone();
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+        let random: u32 = rand::thread_rng().r#gen();
+        let file_name = format!("{}-{}.enc", ts, random);
+        file_path.push(&file_name);
+
+        if !file_path.exists() {
+            return Ok(file_name);
+        }
+    }
+}
+
 // ---- Core: Encrypt (streaming) ----
-pub fn encrypt_file(passphrase: &str, input: &str, delete: bool) -> Result<String> {
+pub fn encrypt_file(passphrase: &str, file_path: &PathBuf, delete: bool) -> Result<String> {
+    // make sure it's a file, and it exists
+    ensure_file(file_path)?;
+
+    // create the salf for generating the key (passphrase + salt)
     let mut salt = [0u8; SALT_LEN];
     rand::thread_rng().fill_bytes(&mut salt);
     let key: [u8; 32] = derive_key(passphrase, &salt)?;
-    let output = unique_filename();
-    let mut reader = BufReader::new(File::open(&input)?);
-    let mut writer = BufWriter::new(File::create(&output)?);
 
+    // create nonce for encryption
+    // TODO: update rand package
     let mut nonce = [0u8; NONCE_LEN];
     rand::thread_rng().fill_bytes(&mut nonce);
 
+    let (path, file_name) = split_file_path(&file_path)?;
+    let unique_file_name = get_unique_file_name(&path)?;
+    let mut unique_file_path = path.clone();
+    unique_file_path.push(&unique_file_name);
+    let mut reader = BufReader::new(File::open(&file_path)?);
+    let mut writer = BufWriter::new(File::create(&unique_file_path)?);
+
+    // write the head - not encrypted
     write_header(&mut writer, &salt, &nonce)?;
 
     let mut cipher = ChaCha20::new((&key).into(), (&nonce).into());
 
-    let stored_name = input;
-    let name_bytes = stored_name.as_bytes();
-    let name_len = name_bytes.len() as u32;
+    // original file name + size - used to restore original file
+    let file_name_bytes = file_name.as_bytes();
+    let file_name_len = file_name_bytes.len() as u32;
 
-    let mut prefix = Vec::with_capacity(4 + name_bytes.len());
-    prefix.extend_from_slice(&name_len.to_le_bytes());
-    prefix.extend_from_slice(name_bytes);
+    let mut prefix = Vec::with_capacity(4 + file_name_bytes.len());
+    prefix.extend_from_slice(&file_name_len.to_le_bytes());
+    prefix.extend_from_slice(file_name_bytes);
 
+    // write prefix - encrypted
     let mut offset: u64 = 0;
     cipher.seek(offset);
     cipher.apply_keystream(&mut prefix);
     writer.write_all(&prefix)?;
     offset += prefix.len() as u64;
 
+    // write file contents - encrypted
     apply_cipher(&mut reader, &mut writer, &mut cipher, offset)?;
 
     writer.flush()?;
     if delete {
         drop(reader);
-        fs::remove_file(input)?;
+        fs::remove_file(file_path)?;
     }
 
-    Ok(output)
+    Ok(unique_file_name)
 }
 
 // ---- Core: Decrypt (streaming) ----
 pub fn decrypt_file(
     passphrase: &str,
-    input: &str,
+    file_path: &PathBuf,
     delete: bool,
     overwrite: bool,
 ) -> Result<String> {
-    let mut reader = BufReader::new(File::open(input)?);
+    let mut reader = BufReader::new(File::open(file_path)?);
     let (salt, nonce) = read_header(&mut reader)?;
 
     let key: [u8; 32] = derive_key(passphrase, &salt)?;
@@ -197,41 +244,35 @@ pub fn decrypt_file(
     offset += original_filename_length as u64;
     let original_file_name = String::from_utf8_lossy(&buffer).to_string();
 
-    let mut writer = get_writer(&original_file_name, overwrite)?;
+    let (path, _) = split_file_path(&file_path)?;
+
+    let mut writer = get_writer(&path, &original_file_name, overwrite)?;
 
     apply_cipher(&mut reader, &mut writer, &mut cipher, offset)?;
 
     writer.flush()?;
     if delete {
         drop(reader);
-        fs::remove_file(input)?;
+        fs::remove_file(file_path)?;
     }
 
     Ok(original_file_name)
 }
 
-fn get_writer(file_name: &str, overwrite: bool) -> Result<BufWriter<File>> {
+fn get_writer(path: &PathBuf, file_name: &str, overwrite: bool) -> Result<BufWriter<File>> {
+    let mut out_file_path = path.clone();
+    out_file_path.push(file_name);
     let file = OpenOptions::new()
         .write(true)
         .truncate(true)
         .create_new(!overwrite)
-        .open(file_name)?;
+        .open(out_file_path)?;
     Ok(BufWriter::new(file))
 }
 
-fn unique_filename() -> String {
-    loop {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let random: u32 = rand::thread_rng().r#gen();
-        let candidate = format!("{}-{}.enc", ts, random);
-
-        let path = PathBuf::from(".").join(&candidate);
-
-        if !path.exists() {
-            return candidate;
-        }
+fn ensure_file(path: &PathBuf) -> Result<()> {
+    match path.is_file() {
+        true => Ok(()),
+        false => Err(Error::Crypto(String::from("Not a file"))),
     }
 }

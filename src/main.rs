@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use crypto::Result;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about = "ChaCha20 file encrypt/decrypt with Argon2id KDF, with encrypted filename support", long_about = None)]
@@ -22,13 +23,13 @@ enum Commands {
     /// Encrypt the input file
     Encrypt {
         /// Input file path to encrypt
-        file_name: String,
+        file_name: PathBuf,
     },
 
     /// Decrypt the input file
     Decrypt {
         /// Input file (must be produced by this tool)
-        file_name: String,
+        file_name: PathBuf,
 
         /// Overwrite existing files
         #[arg(short, long)]
@@ -43,7 +44,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Encrypt { file_name } => {
             let encrypted_file = crypto::encrypt_file(&cli.passphrase, &file_name, cli.delete)?;
-            println!("Encrypted {} -> {}", file_name, encrypted_file);
+            println!("Encrypted {:?} -> {}", file_name, encrypted_file);
         }
 
         Commands::Decrypt {
@@ -52,7 +53,7 @@ fn main() -> Result<()> {
         } => {
             let decrypted_file =
                 crypto::decrypt_file(&cli.passphrase, &file_name, cli.delete, overwrite)?;
-            println!("Decrypted {} -> {}", file_name, decrypted_file);
+            println!("Decrypted {:?} -> {}", file_name, decrypted_file);
         }
     }
 
