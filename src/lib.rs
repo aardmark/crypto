@@ -5,7 +5,6 @@ use rand::RngCore;
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::result;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -188,7 +187,7 @@ pub fn encrypt_file(passphrase: &str, file_path: &PathBuf, delete: bool) -> Resu
     let mut cipher = ChaCha20::new((&key).into(), (&nonce).into());
 
     // original file name + size - used to restore original file
-    let file_name_bytes = file_name.as_bytes();
+    let file_name_bytes = file_name.as_encoded_bytes();
     let file_name_len = file_name_bytes.len() as u32;
 
     let mut prefix = Vec::with_capacity(4 + file_name_bytes.len());
