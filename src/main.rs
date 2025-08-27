@@ -3,7 +3,7 @@ use crypto::Result;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(author, version, about = "File encryption/decryption utitlity", long_about = None)]
+#[command(author, version, about = "File encryption/decryption utility", long_about = None)]
 struct Cli {
     /// Subcommand: encrypt or decrypt
     #[command(subcommand)]
